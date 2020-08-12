@@ -101,6 +101,8 @@ public class PulsarFetcher<T> {
 
     protected final Map<String, Object> readerConf;
 
+    protected final boolean failOnDataLoss;
+
     protected final PulsarDeserializationSchema<T> deserializer;
 
     protected final int pollTimeoutMs;
@@ -228,6 +230,14 @@ public class PulsarFetcher<T> {
                     autoWatermarkInterval);
 
             periodicEmitter.start();
+        }
+
+        // get failOnDataLoss from reader conf
+        if (readerConf != null && readerConf.containsKey(PulsarOptions.FAIL_ON_DATA_LOSS_OPTION_KEY)) {
+            String failOnDataLossVal = readerConf.getOrDefault(PulsarOptions.FAIL_ON_DATA_LOSS_OPTION_KEY, "true").toString();
+            failOnDataLoss = Boolean.parseBoolean(failOnDataLossVal);
+        } else {
+            failOnDataLoss = true;
         }
     }
 
@@ -527,7 +537,7 @@ public class PulsarFetcher<T> {
             ExceptionProxy exceptionProxy) {
 
         Map<String, MessageId> startingOffsets = states.stream().collect(Collectors.toMap(PulsarTopicState::getTopic, PulsarTopicState::getOffset));
-        metadataReader.setupCursor(startingOffsets);
+        metadataReader.setupCursor(startingOffsets, failOnDataLoss);
         Map<String, ReaderThread> topic2Threads = new HashMap<>();
 
         for (PulsarTopicState state : states) {
@@ -546,11 +556,8 @@ public class PulsarFetcher<T> {
     }
 
     protected ReaderThread createReaderThread(ExceptionProxy exceptionProxy, PulsarTopicState state) {
-        boolean failOnDataLoss = true;
-        if (readerConf.containsKey(PulsarOptions.FAIL_ON_DATA_LOSS_OPTION_KEY)) {
-            String failOnDataLossVal = readerConf.getOrDefault(PulsarOptions.FAIL_ON_DATA_LOSS_OPTION_KEY, "true").toString();
-            failOnDataLoss = Boolean.parseBoolean(failOnDataLossVal);
-        }
+        log.info("Create reader with failOnDataLoss {}", failOnDataLoss);
+
         return new ReaderThread(
                 this,
                 state,

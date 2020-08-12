@@ -26,6 +26,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.collections.ListUtils;
 import org.apache.pulsar.client.admin.PulsarAdmin;
 import org.apache.pulsar.client.admin.PulsarAdminException;
+import org.apache.pulsar.client.admin.PulsarAdminException.ConflictException;
 import org.apache.pulsar.client.api.MessageId;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.impl.MessageIdImpl;
@@ -222,19 +223,26 @@ public class PulsarMetadataReader implements AutoCloseable {
         SchemaUtils.uploadPulsarSchema(admin, topic, si);
     }
 
-    public void setupCursor(Map<String, MessageId> offset) {
-        if (!useExternalSubscription) {
+    public void setupCursor(Map<String, MessageId> offset, boolean failOnDataLoss) {
+        // if failOnDataLoss is false, we could continue, and re-create the sub.
+        if (!useExternalSubscription || !failOnDataLoss) {
             for (Map.Entry<String, MessageId> entry : offset.entrySet()) {
                 try {
                     log.info("Setting up subscription {} on topic {} at position {}", subscriptionName, entry.getKey(), entry.getValue());
                     admin.topics().createSubscription(entry.getKey(), subscriptionName, entry.getValue());
                     log.info("Subscription {} on topic {} at position {} finished", subscriptionName, entry.getKey(), entry.getValue());
+                } catch (ConflictException e) {
+                    log.info("Subscription {} on topic {} already exists", subscriptionName, entry.getKey());
                 } catch (PulsarAdminException e) {
                     throw new RuntimeException(
-                            String.format("Failed to set up cursor for %s", TopicName.get(entry.getKey()).toString()), e);
+                            String.format("Failed to set up cursor for %s ", TopicName.get(entry.getKey()).toString()), e);
                 }
             }
         }
+    }
+
+    public void setupCursor(Map<String, MessageId> offset) {
+        setupCursor(offset, true);
     }
 
     public void commitCursorToOffset(Map<String, MessageId> offset) {
@@ -248,10 +256,11 @@ public class PulsarMetadataReader implements AutoCloseable {
                 if (e instanceof PulsarAdminException &&
                         (((PulsarAdminException) e).getStatusCode() == 404 ||
                                 ((PulsarAdminException) e).getStatusCode() == 412)) {
-                    log.info("Cannot commit cursor since the topic {} has been deleted during execution", tp);
+                    log.info("Cannot commit cursor offset %d since the topic {} has been deleted during execution",
+                            entry.getValue(), tp);
                 } else {
                     throw new RuntimeException(
-                            String.format("Failed to commit cursor for %s", tp), e);
+                            String.format("Failed to commit cursor offset %d for %s", entry.getValue(),  tp), e);
                 }
             }
         }
